@@ -1,0 +1,26 @@
+# Node / Svelte
+node_modules/
+web/build/
+web/.svelte-kit/
+web/.env
+web/.env.*
+
+# Capacitor native projects (generated locally; regenerate with `cap add`)
+web/android/
+web/ios/
+
+# Go
+server/cryptex
+server/cryptex.exe
+*.test
+
+# Runtime data — the photo and password hash live on the mounted volume,
+# NEVER in the repo.
+data/
+*.hash
+photo.bin
+photo.json
+
+# Misc
+.DS_Store
+*.log

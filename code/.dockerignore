@@ -1,0 +1,13 @@
+# Keep the build context small and never leak local state into the image.
+**/node_modules
+web/build
+web/.svelte-kit
+web/android
+web/ios
+server/cryptex
+server/cryptex.exe
+data
+*.md
+.github
+.git
+.gitignore

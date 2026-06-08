@@ -1,0 +1,27 @@
+# Local run and a reference for the TrueNAS "Custom App" (which takes the same
+# image, volume, ports, and env). Build locally with `docker compose up --build`,
+# or set `image:` to the GHCR image the CI workflow publishes.
+services:
+  cryptex:
+    build: .
+    image: ghcr.io/OWNER/cryptex:latest # <- replace OWNER, or use `build: .`
+    container_name: cryptex
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # host:container — put a TLS reverse proxy in front in prod
+    volumes:
+      # Persistent dataset: password hash + photo survive restarts/rebuilds.
+      # On TrueNAS, point the host side at your dataset mountpoint.
+      - ./data:/data
+    environment:
+      LISTEN_ADDR: ":8080"
+      DATA_DIR: "/data"
+      # REQUIRED in production: a stable random secret so tokens survive restarts.
+      TOKEN_SIGNING_KEY: "change-me-to-a-long-random-string"
+      # REQUIRED to enable changing the combination over the API.
+      ADMIN_TOKEN: "change-me-too"
+      # Optional one-time bootstrap of the combination on first start.
+      # CRYPTEX_INIT_PASSWORD: "APPLE"
+      MAX_UPLOAD_BYTES: "10485760"
+      TOKEN_TTL_SECONDS: "600"
+      MIN_UNLOCK_MS: "250"

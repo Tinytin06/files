@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(go vet *)",
+      "Bash(go build *)"
+    ]
+  }
+}
