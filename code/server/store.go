@@ -54,10 +54,41 @@ func (s *Store) ReadPasswordHash() (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-func (s *Store) WritePasswordHash(encoded string) error {
+// WritePasswordHash stores the hash plus the combination's character length.
+// The length (not the value) lets the UI render one ring per character. The
+// plaintext is never written — only its length.
+func (s *Store) WritePasswordHash(encoded string, length int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return atomicWrite(s.hashPath(), []byte(encoded+"\n"), 0o600)
+	if err := atomicWrite(s.hashPath(), []byte(encoded+"\n"), 0o600); err != nil {
+		return err
+	}
+	mb, err := json.Marshal(pwMeta{Len: length})
+	if err != nil {
+		return err
+	}
+	return atomicWrite(s.pwMetaPath(), mb, 0o600)
+}
+
+type pwMeta struct {
+	Len int `json:"len"`
+}
+
+func (s *Store) pwMetaPath() string { return filepath.Join(s.dir, "password.json") }
+
+// ReadPasswordLen returns the stored combination length, if known.
+func (s *Store) ReadPasswordLen() (int, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	b, err := os.ReadFile(s.pwMetaPath())
+	if err != nil {
+		return 0, false
+	}
+	var m pwMeta
+	if json.Unmarshal(b, &m) != nil || m.Len <= 0 {
+		return 0, false
+	}
+	return m.Len, true
 }
 
 // --- photo ---

@@ -68,7 +68,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("init password: %v", err)
 		}
-		if err := store.WritePasswordHash(h); err != nil {
+		if err := store.WritePasswordHash(h, len([]rune(init))); err != nil {
 			log.Fatalf("init password: %v", err)
 		}
 		log.Print("initialized combination from CRYPTEX_INIT_PASSWORD")

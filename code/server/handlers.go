@@ -138,7 +138,7 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	if err := a.store.WritePasswordHash(hash); err != nil {
+	if err := a.store.WritePasswordHash(hash, len([]rune(req.NewCombination))); err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
@@ -153,8 +153,15 @@ type configResponse struct {
 // GET /api/config — UI shape only (ring count + dialable characters). Carries
 // no secret: it describes the cryptex, not the combination.
 func (a *App) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	// Ring count follows the stored combination's length when known, so setting
+	// a new combination automatically reshapes the cryptex. Falls back to the
+	// CRYPTEX_RINGS default before any combination is set.
+	rings := a.cfg.Rings
+	if n, ok := a.store.ReadPasswordLen(); ok {
+		rings = n
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(configResponse{Rings: a.cfg.Rings, Alphabet: a.cfg.Alphabet})
+	_ = json.NewEncoder(w).Encode(configResponse{Rings: rings, Alphabet: a.cfg.Alphabet})
 }
 
 // --- helpers ---

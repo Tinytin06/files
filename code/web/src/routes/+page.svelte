@@ -96,7 +96,13 @@
 			: code === 403
 				? 'Admin token rejected.'
 				: 'Change failed.';
-		if (ok) newCombo = '';
+		if (ok) {
+			newCombo = '';
+			// Re-pull config so the rings reshape to the new combination length.
+			const c = await getConfig();
+			rings = c.rings;
+			alphabet = c.alphabet;
+		}
 	}
 
 	function onLock() {
