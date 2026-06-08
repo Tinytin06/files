@@ -4,11 +4,9 @@
 	import {
 		unlock,
 		downloadPhoto,
-		replacePhoto,
 		adminUploadPhoto,
 		changeCombination,
 		getConfig,
-		canWrite,
 		lock
 	} from '$lib/api';
 
@@ -51,23 +49,6 @@
 		const ok = await downloadPhoto();
 		busy = false;
 		message = ok ? 'Photo downloaded.' : 'Download failed (token may have expired).';
-	}
-
-	async function onReplace(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
-		busy = true;
-		const { ok, status: code } = await replacePhoto(file);
-		busy = false;
-		message = ok
-			? 'Photo replaced.'
-			: code === 403
-				? 'This token cannot write.'
-				: code === 415
-					? 'Not a supported image.'
-					: 'Replace failed.';
-		input.value = '';
 	}
 
 	async function onAdminUpload(e: Event) {
@@ -122,14 +103,6 @@
 			<p class="unlocked-banner">🔓 Unlocked</p>
 			<div class="actions">
 				<button onclick={onDownload} disabled={busy}>Download photo</button>
-
-				{#if canWrite()}
-					<label class="filebtn">
-						Replace photo
-						<input type="file" accept="image/*" onchange={onReplace} disabled={busy} />
-					</label>
-				{/if}
-
 				<button class="secondary" onclick={onLock}>Lock</button>
 			</div>
 		</section>
@@ -158,7 +131,14 @@
 
 			<hr />
 
-			<input type="text" placeholder="New combination (e.g. APPLE)" bind:value={newCombo} />
+			<input
+				type="text"
+				class="combo-input"
+				placeholder="New combination (e.g. APPLE)"
+				autocapitalize="characters"
+				value={newCombo}
+				oninput={(e) => (newCombo = e.currentTarget.value.toUpperCase())}
+			/>
 			<button onclick={onChangeCombo} disabled={busy || !adminToken || !newCombo}>
 				Set new combination
 			</button>
@@ -264,6 +244,10 @@
 		color: #8a7355;
 		margin: 0;
 		line-height: 1.4;
+	}
+	.combo-input {
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
 	}
 	.admin-upload {
 		text-align: center;

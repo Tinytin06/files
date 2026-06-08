@@ -1,10 +1,13 @@
 // REST client for the cryptex API. The client only ever observes HTTP status
-// codes — it never receives, stores, or infers the real password.
+// codes — it never receives, stores, or infers the real password. Secrets sent
+// to the server (the guess, a new combination) are sealed with ML-KEM-768.
 //
 // Base URL resolution:
 //   - Website build: defaults to "/api" (same origin as the served SPA).
 //   - Mobile build:  set VITE_API_BASE_URL=https://your-host/api at build time,
 //     because the native shell has no same-origin server to talk to.
+import { seal } from './crypto';
+
 const BASE: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
 let token: string | null = null;
@@ -46,12 +49,13 @@ export function lock(): void {
 	scope = null;
 }
 
-/** Submit a guess. Returns true on 200 (unlocked), false on 401. */
+/** Submit a guess (sealed with ML-KEM-768). 200 = unlocked, 401 = wrong. */
 export async function unlock(guess: string): Promise<{ ok: boolean; rateLimited: boolean }> {
+	const env = await seal(BASE, guess);
 	const res = await fetch(`${BASE}/unlock`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ guess })
+		body: JSON.stringify(env)
 	});
 	if (res.status === 200) {
 		const data = await res.json();
@@ -104,18 +108,22 @@ export async function adminUploadPhoto(
 	return { ok: res.ok, status: res.status };
 }
 
-/** Change the combination. Requires the admin token (stronger than a read). */
+/**
+ * Change the combination. Requires the admin token (stronger than a read); the
+ * new combination is sealed with ML-KEM-768 before sending.
+ */
 export async function changeCombination(
 	newCombination: string,
 	adminToken: string
 ): Promise<{ ok: boolean; status: number }> {
+	const env = await seal(BASE, newCombination);
 	const res = await fetch(`${BASE}/password`, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
 			Authorization: `Bearer ${adminToken}`
 		},
-		body: JSON.stringify({ new_combination: newCombination })
+		body: JSON.stringify(env)
 	});
 	return { ok: res.ok, status: res.status };
 }

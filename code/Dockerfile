@@ -11,7 +11,7 @@ COPY web/ ./
 RUN npm run build
 
 # --- 2. Build the Go server (static binary) ---
-FROM golang:1.23-alpine AS server
+FROM golang:1.24-alpine AS server
 WORKDIR /src
 COPY server/go.mod server/go.sum* ./
 RUN go mod download

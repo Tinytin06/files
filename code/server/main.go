@@ -21,6 +21,7 @@ type App struct {
 	store   *Store
 	tokens  *TokenManager
 	limiter *RateLimiter
+	kem     *KEM
 	cfg     Config
 }
 
@@ -77,15 +78,22 @@ func main() {
 		log.Print("WARNING: no combination set; unlock will always 401. Set one via POST /api/password (admin token) or CRYPTEX_INIT_PASSWORD.")
 	}
 
+	kem, err := NewKEM(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("kem: %v", err)
+	}
+
 	signingKey := tokenSigningKey()
 	app := &App{
 		store:   store,
 		tokens:  NewTokenManager(signingKey, cfg.TokenTTL),
 		limiter: NewRateLimiter(),
+		kem:     kem,
 		cfg:     cfg,
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/kem", app.handleKEM)
 	mux.HandleFunc("POST /api/unlock", app.handleUnlock)
 	mux.HandleFunc("GET /api/photo", app.handlePhotoGet)
 	mux.HandleFunc("PUT /api/photo", app.handlePhotoPut)

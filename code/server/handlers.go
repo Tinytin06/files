@@ -14,16 +14,19 @@ import (
 	"time"
 )
 
-type unlockRequest struct {
-	Guess string `json:"guess"`
-}
-
 type unlockResponse struct {
 	Token string `json:"token"`
 	Scope string `json:"scope"`
 }
 
-// POST /api/unlock — the guess itself is the test.
+// handleKEM serves the ML-KEM-768 public key the client encapsulates to.
+func (a *App) handleKEM(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"public_key": a.kem.PublicKeyB64()})
+}
+
+// POST /api/unlock — the guess itself is the test. The guess arrives sealed in
+// an ML-KEM-768 envelope; we decapsulate + decrypt before comparing.
 func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ip := clientIP(r)
@@ -34,11 +37,18 @@ func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req unlockRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+	var env envelope
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&env); err != nil {
 		a.unauthorized(w, start)
 		return
 	}
+	guessBytes, err := a.kem.Open(env)
+	if err != nil {
+		a.limiter.Fail(ip)
+		a.unauthorized(w, start)
+		return
+	}
+	guess := string(guessBytes)
 
 	if !a.store.HasPassword() {
 		// No secret set yet: nothing can unlock. Still uniform 401.
@@ -54,7 +64,7 @@ func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, err := VerifyPassword(req.Guess, hash)
+	ok, err := VerifyPassword(guess, hash)
 	if err != nil || !ok {
 		a.limiter.Fail(ip)
 		a.unauthorized(w, start)
@@ -117,28 +127,31 @@ func (a *App) handlePhotoPut(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-type passwordRequest struct {
-	NewCombination string `json:"new_combination"`
-}
-
-// POST /api/password — change the combination. Behind the admin token, which is
-// a stronger bar than solving the cryptex for a read.
+// POST /api/password — change the combination. Behind the admin token (a
+// stronger bar than a read), and the new combination arrives sealed in an
+// ML-KEM-768 envelope, never as plaintext.
 func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 	if !a.adminAuthorized(r) {
 		http.Error(w, "", http.StatusForbidden)
 		return
 	}
-	var req passwordRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&req); err != nil || req.NewCombination == "" {
-		http.Error(w, "missing new_combination", http.StatusBadRequest)
+	var env envelope
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&env); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	hash, err := HashPassword(req.NewCombination)
+	plain, err := a.kem.Open(env)
+	if err != nil || len(plain) == 0 {
+		http.Error(w, "could not decrypt new combination", http.StatusBadRequest)
+		return
+	}
+	newCombo := string(plain)
+	hash, err := HashPassword(newCombo)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
-	if err := a.store.WritePasswordHash(hash, len([]rune(req.NewCombination))); err != nil {
+	if err := a.store.WritePasswordHash(hash, len([]rune(newCombo))); err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}

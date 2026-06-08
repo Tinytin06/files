@@ -8,9 +8,11 @@ code/                     <- make THIS the git repo root
 ├── web/                  Svelte (SvelteKit, static SPA)
 │   ├── src/lib/Cryptex.svelte   the rotatable cryptex widget
 │   ├── src/lib/api.ts           REST client (status codes only)
-│   └── src/routes/+page.svelte  unlock / download / replace / change-combo UI
+│   ├── src/lib/crypto.ts        ML-KEM-768 sealing of the secret
+│   └── src/routes/+page.svelte  unlock / download / change-combo UI
 ├── server/               Go REST API (the Docker process)
 │   ├── handlers.go       /api/unlock, /api/photo (GET/PUT), /api/password
+│   ├── kem.go            ML-KEM-768 key + envelope decryption
 │   ├── hash.go           argon2id + constant-time verify
 │   ├── token.go          HMAC-signed scoped tokens (no JWT dep)
 │   ├── store.go          password hash + photo on the mounted volume
@@ -35,9 +37,16 @@ Both only ever observe HTTP status codes. The password never reaches the client.
 
 ## The security contract (kept by the server)
 
+- **Post-quantum sealed transport.** The guess (and a new combination) are
+  never sent as plaintext. The client fetches the server's **ML-KEM-768**
+  (FIPS 203) public key from `GET /api/kem`, encapsulates a 32-byte shared
+  secret to it, encrypts the value with **AES-256-GCM** under that secret, and
+  posts `{ kem, nonce, ciphertext }`. Only the server's private key can
+  decapsulate. This protects the password even if TLS were stripped.
 - `POST /api/unlock` → `200` + scoped token on the right guess, identical empty
-  `401` on every wrong one, with a uniform minimum response time. The guess is
-  argon2id-hashed and compared in constant time. No hint, no partial match.
+  `401` on every wrong one, with a uniform minimum response time. After
+  decryption the guess is argon2id-hashed and compared in constant time. No
+  hint, no partial match.
 - Combination is stored only as a salted argon2id hash on the mounted volume.
 - The photo is reachable **only** via the token-checked `/api/photo` — never a
   static/guessable URL.
@@ -45,11 +54,14 @@ Both only ever observe HTTP status codes. The password never reaches the client.
   (so the owner can seed the photo without unlocking). It validates by magic
   bytes (not the extension), caps size, and replaces atomically (temp + rename).
   The admin upload control lives in the UI's "admin" panel.
-- `POST /api/password` sits behind the `ADMIN_TOKEN` — a stronger bar than a read.
+- `POST /api/password` sits behind the `ADMIN_TOKEN` **and** takes the new
+  combination as an ML-KEM-768 sealed envelope. The UI's admin panel forces the
+  combination to uppercase (matching the default A–Z rings).
 - Per-client exponential backoff on `/api/unlock`.
 
-> TLS is terminated by a reverse proxy in front of the container (see Deploy),
-> so guesses never travel in plaintext.
+> The ML-KEM key seed persists on the mounted volume (`kem.seed`) so the public
+> key is stable across restarts. TLS still belongs in front (see Deploy); the
+> sealing is defence-in-depth on top of it.
 
 ## Run it locally
 
@@ -132,14 +144,11 @@ with `cap add` on any machine.
    built-in) so the public URL is HTTPS. The app honors `X-Forwarded-For` for
    rate limiting.
 
-After deploy, change the combination any time:
-
-```bash
-curl -X POST https://cryptex.example.com/api/password \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"new_combination":"NEWWORD"}'
-```
+After deploy, change the combination from the **admin panel in the web UI**
+(expand "Change combination (admin)", paste the `ADMIN_TOKEN`, type the new
+combination — it's forced to uppercase, sealed with ML-KEM-768, and sent). A
+raw `curl` no longer works because the endpoint expects a sealed envelope, not
+plaintext JSON.
 
 See the specs in the parent folder (`../API.md`, `../ARCHITECTURE.md`,
 `../DEPLOYMENT.md`) for the full contract this implements.
