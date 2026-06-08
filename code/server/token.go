@@ -24,7 +24,8 @@ const (
 
 type claims struct {
 	Scope string `json:"scope"`
-	Exp   int64  `json:"exp"` // unix seconds
+	Entry string `json:"entry"` // id of the unlocked entry
+	Exp   int64  `json:"exp"`   // unix seconds
 	Jti   string `json:"jti"`
 }
 
@@ -39,13 +40,13 @@ func NewTokenManager(key []byte, ttl time.Duration) *TokenManager {
 
 var b64u = base64.RawURLEncoding
 
-// Issue mints a token with the given scope, valid for the manager's TTL.
-func (t *TokenManager) Issue(scope string) (string, error) {
+// Issue mints a token for the given scope + entry, valid for the manager's TTL.
+func (t *TokenManager) Issue(scope, entry string) (string, error) {
 	jti := make([]byte, 12)
 	if _, err := rand.Read(jti); err != nil {
 		return "", err
 	}
-	c := claims{Scope: scope, Exp: time.Now().Add(t.ttl).Unix(), Jti: b64u.EncodeToString(jti)}
+	c := claims{Scope: scope, Entry: entry, Exp: time.Now().Add(t.ttl).Unix(), Jti: b64u.EncodeToString(jti)}
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return "", err

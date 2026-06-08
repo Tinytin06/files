@@ -26,7 +26,9 @@ func (a *App) handleKEM(w http.ResponseWriter, _ *http.Request) {
 }
 
 // POST /api/unlock — the guess itself is the test. The guess arrives sealed in
-// an ML-KEM-768 envelope; we decapsulate + decrypt before comparing.
+// an ML-KEM-768 envelope; we decapsulate + decrypt, then compare it against
+// every entry. A match issues a token bound to that entry; nothing about which
+// entry (or how many) is revealed.
 func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ip := clientIP(r)
@@ -50,22 +52,22 @@ func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	}
 	guess := string(guessBytes)
 
-	if !a.store.HasPassword() {
-		// No secret set yet: nothing can unlock. Still uniform 401.
+	entries, err := a.store.EntryHashes()
+	if err != nil || len(entries) == 0 {
 		a.limiter.Fail(ip)
 		a.unauthorized(w, start)
 		return
 	}
 
-	hash, err := a.store.ReadPasswordHash()
-	if err != nil {
-		a.limiter.Fail(ip)
-		a.unauthorized(w, start)
-		return
+	// Check every entry without an early break, so response time doesn't reveal
+	// which entry matched (or how far down the list it was).
+	matched := ""
+	for _, e := range entries {
+		if ok, verr := VerifyPassword(guess, e.Hash); verr == nil && ok {
+			matched = e.ID
+		}
 	}
-
-	ok, err := VerifyPassword(guess, hash)
-	if err != nil || !ok {
+	if matched == "" {
 		a.limiter.Fail(ip)
 		a.unauthorized(w, start)
 		return
@@ -73,7 +75,7 @@ func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 
 	// Correct. Solving the cryptex is the bar for a read+write token.
 	a.limiter.Reset(ip)
-	token, err := a.tokens.Issue(ScopeReadWrite)
+	token, err := a.tokens.Issue(ScopeReadWrite, matched)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -83,12 +85,13 @@ func (a *App) handleUnlock(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(unlockResponse{Token: token, Scope: ScopeReadWrite})
 }
 
-// GET /api/photo — any valid token may download.
+// GET /api/photo — download the file for the entry the token unlocked.
 func (a *App) handlePhotoGet(w http.ResponseWriter, r *http.Request) {
-	if _, ok := a.requireToken(w, r, false); !ok {
+	c, ok := a.requireToken(w, r, false)
+	if !ok {
 		return
 	}
-	data, meta, err := a.store.ReadPhoto()
+	data, meta, err := a.store.ReadEntryFile(c.Entry)
 	if err != nil {
 		http.Error(w, "", http.StatusNotFound)
 		return
@@ -100,14 +103,94 @@ func (a *App) handlePhotoGet(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// PUT /api/photo — requires a write-scoped unlock token OR the admin token.
-// The admin path lets the owner seed/replace the photo without solving the
-// cryptex first.
-func (a *App) handlePhotoPut(w http.ResponseWriter, r *http.Request) {
+// --- admin entry management (all behind the admin token) ---
+
+// GET /api/entries — list entries (non-secret summary: id, label, length, file?).
+func (a *App) handleEntriesList(w http.ResponseWriter, r *http.Request) {
 	if !a.adminAuthorized(r) {
-		if _, ok := a.requireToken(w, r, true); !ok {
-			return
+		http.Error(w, "", http.StatusForbidden)
+		return
+	}
+	list, err := a.store.ListEntries()
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(list)
+}
+
+type createEntryRequest struct {
+	Label string   `json:"label"`
+	Combo envelope `json:"combo"`
+}
+
+// POST /api/entries — create a new combination (sealed) with a label. Enforces
+// the uniform length and rejects a combination that already matches an entry.
+func (a *App) handleEntryCreate(w http.ResponseWriter, r *http.Request) {
+	if !a.adminAuthorized(r) {
+		http.Error(w, "", http.StatusForbidden)
+		return
+	}
+	var req createEntryRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	plain, err := a.kem.Open(req.Combo)
+	if err != nil || len(plain) == 0 {
+		http.Error(w, "could not decrypt combination", http.StatusBadRequest)
+		return
+	}
+	combo := string(plain)
+	length := len([]rune(combo))
+
+	// Uniform length: must match existing entries once any exist.
+	if want, ok := a.store.UniformLen(); ok && length != want {
+		http.Error(w, fmt.Sprintf("combination must be %d characters", want),
+			http.StatusUnprocessableEntity)
+		return
+	}
+
+	// Reject a duplicate combination (would make unlock ambiguous).
+	if existing, err := a.store.EntryHashes(); err == nil {
+		for _, e := range existing {
+			if ok, verr := VerifyPassword(combo, e.Hash); verr == nil && ok {
+				http.Error(w, "combination already exists", http.StatusConflict)
+				return
+			}
 		}
+	}
+
+	hash, err := HashPassword(combo)
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	id, err := NewEntryID()
+	if err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	if err := a.store.CreateEntry(id, req.Label, hash, length); err != nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
+}
+
+// PUT /api/entries/{id}/file — upload/replace an entry's file.
+func (a *App) handleEntryFile(w http.ResponseWriter, r *http.Request) {
+	if !a.adminAuthorized(r) {
+		http.Error(w, "", http.StatusForbidden)
+		return
+	}
+	id := r.PathValue("id")
+	if !validID(id) || !a.store.EntryExists(id) {
+		http.Error(w, "", http.StatusNotFound)
+		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, a.cfg.UploadMax))
 	if err != nil {
@@ -119,40 +202,26 @@ func (a *App) handlePhotoPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unsupported image type", http.StatusUnsupportedMediaType)
 		return
 	}
-	meta := photoMeta{ContentType: ct, Filename: "secret" + ext}
-	if err := a.store.WritePhoto(body, meta); err != nil {
+	if err := a.store.WriteEntryFile(id, body, ct, "secret"+ext); err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// POST /api/password — change the combination. Behind the admin token (a
-// stronger bar than a read), and the new combination arrives sealed in an
-// ML-KEM-768 envelope, never as plaintext.
-func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
+// DELETE /api/entries/{id} — remove a combination and its file.
+func (a *App) handleEntryDelete(w http.ResponseWriter, r *http.Request) {
 	if !a.adminAuthorized(r) {
 		http.Error(w, "", http.StatusForbidden)
 		return
 	}
-	var env envelope
-	if err := json.NewDecoder(io.LimitReader(r.Body, 8192)).Decode(&env); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+	id := r.PathValue("id")
+	if !validID(id) {
+		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	plain, err := a.kem.Open(env)
-	if err != nil || len(plain) == 0 {
-		http.Error(w, "could not decrypt new combination", http.StatusBadRequest)
-		return
-	}
-	newCombo := string(plain)
-	hash, err := HashPassword(newCombo)
-	if err != nil {
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-	if err := a.store.WritePasswordHash(hash, len([]rune(newCombo))); err != nil {
-		http.Error(w, "", http.StatusInternalServerError)
+	if err := a.store.DeleteEntry(id); err != nil {
+		http.Error(w, "", http.StatusNotFound)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -164,13 +233,13 @@ type configResponse struct {
 }
 
 // GET /api/config — UI shape only (ring count + dialable characters). Carries
-// no secret: it describes the cryptex, not the combination.
+// no secret: it describes the cryptex, not any combination.
 func (a *App) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	// Ring count follows the stored combination's length when known, so setting
-	// a new combination automatically reshapes the cryptex. Falls back to the
-	// CRYPTEX_RINGS default before any combination is set.
+	// Ring count follows the entries' uniform combination length when set, so
+	// adding the first combination reshapes the cryptex. Falls back to the
+	// CRYPTEX_RINGS default before any entry exists.
 	rings := a.cfg.Rings
-	if n, ok := a.store.ReadPasswordLen(); ok {
+	if n, ok := a.store.UniformLen(); ok {
 		rings = n
 	}
 	w.Header().Set("Content-Type", "application/json")

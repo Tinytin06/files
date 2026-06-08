@@ -62,20 +62,29 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 
-	// Optional one-time bootstrap of the combination from the environment, so a
-	// fresh deploy can be unlockable without a manual admin call.
-	if init := os.Getenv("CRYPTEX_INIT_PASSWORD"); init != "" && !store.HasPassword() {
+	// Fold any legacy single-secret layout into a "default" entry.
+	if err := migrateLegacy(store); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+
+	// Optional one-time bootstrap of a default combination from the environment,
+	// so a fresh deploy is unlockable without a manual admin call.
+	if init := os.Getenv("CRYPTEX_INIT_PASSWORD"); init != "" && store.EntryCount() == 0 {
 		h, err := HashPassword(init)
 		if err != nil {
 			log.Fatalf("init password: %v", err)
 		}
-		if err := store.WritePasswordHash(h, len([]rune(init))); err != nil {
+		id, err := NewEntryID()
+		if err != nil {
 			log.Fatalf("init password: %v", err)
 		}
-		log.Print("initialized combination from CRYPTEX_INIT_PASSWORD")
+		if err := store.CreateEntry(id, "default", h, len([]rune(init))); err != nil {
+			log.Fatalf("init password: %v", err)
+		}
+		log.Print("initialized default entry from CRYPTEX_INIT_PASSWORD")
 	}
-	if !store.HasPassword() {
-		log.Print("WARNING: no combination set; unlock will always 401. Set one via POST /api/password (admin token) or CRYPTEX_INIT_PASSWORD.")
+	if store.EntryCount() == 0 {
+		log.Print("WARNING: no entries set; unlock will always 401. Add one in the admin panel (admin token) or set CRYPTEX_INIT_PASSWORD.")
 	}
 
 	kem, err := NewKEM(cfg.DataDir)
@@ -96,8 +105,10 @@ func main() {
 	mux.HandleFunc("GET /api/kem", app.handleKEM)
 	mux.HandleFunc("POST /api/unlock", app.handleUnlock)
 	mux.HandleFunc("GET /api/photo", app.handlePhotoGet)
-	mux.HandleFunc("PUT /api/photo", app.handlePhotoPut)
-	mux.HandleFunc("POST /api/password", app.handlePassword)
+	mux.HandleFunc("GET /api/entries", app.handleEntriesList)
+	mux.HandleFunc("POST /api/entries", app.handleEntryCreate)
+	mux.HandleFunc("PUT /api/entries/{id}/file", app.handleEntryFile)
+	mux.HandleFunc("DELETE /api/entries/{id}", app.handleEntryDelete)
 	mux.HandleFunc("GET /api/config", app.handleConfig)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

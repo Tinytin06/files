@@ -4,30 +4,40 @@
 	import {
 		unlock,
 		downloadPhoto,
-		adminUploadPhoto,
-		changeCombination,
 		getConfig,
-		lock
+		lock,
+		listEntries,
+		createEntry,
+		uploadEntryFile,
+		deleteEntry,
+		type Entry
 	} from '$lib/api';
 
 	let status = $state<'locked' | 'unlocked'>('locked');
 	let message = $state('Rotate the rings and unlock.');
 	let busy = $state(false);
 
-	// UI shape comes from the server (set via CRYPTEX_RINGS / CRYPTEX_ALPHABET).
+	// UI shape comes from the server (uniform combination length / alphabet).
 	let rings = $state(5);
 	let alphabet = $state('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
 
-	onMount(async () => {
+	onMount(refreshConfig);
+
+	async function refreshConfig() {
 		const c = await getConfig();
 		rings = c.rings;
 		alphabet = c.alphabet;
-	});
+	}
 
-	// admin / change-combination panel
+	// admin panel
 	let showAdmin = $state(false);
 	let adminToken = $state('');
+	let entries = $state<Entry[]>([]);
+	let loaded = $state(false);
+	// "add new combination" form
+	let newLabel = $state('');
 	let newCombo = $state('');
+	let newFile = $state<File | null>(null);
 
 	async function onSubmit(guess: string) {
 		busy = true;
@@ -48,48 +58,81 @@
 		busy = true;
 		const ok = await downloadPhoto();
 		busy = false;
-		message = ok ? 'Photo downloaded.' : 'Download failed (token may have expired).';
-	}
-
-	async function onAdminUpload(e: Event) {
-		const input = e.target as HTMLInputElement;
-		const file = input.files?.[0];
-		if (!file) return;
-		busy = true;
-		const { ok, status: code } = await adminUploadPhoto(file, adminToken);
-		busy = false;
-		message = ok
-			? 'Photo uploaded.'
-			: code === 403
-				? 'Admin token rejected.'
-				: code === 415
-					? 'Not a supported image.'
-					: 'Upload failed.';
-		input.value = '';
-	}
-
-	async function onChangeCombo() {
-		busy = true;
-		const { ok, status: code } = await changeCombination(newCombo, adminToken);
-		busy = false;
-		message = ok
-			? 'Combination changed.'
-			: code === 403
-				? 'Admin token rejected.'
-				: 'Change failed.';
-		if (ok) {
-			newCombo = '';
-			// Re-pull config so the rings reshape to the new combination length.
-			const c = await getConfig();
-			rings = c.rings;
-			alphabet = c.alphabet;
-		}
+		message = ok ? 'File downloaded.' : 'Download failed (token may have expired).';
 	}
 
 	function onLock() {
 		lock();
 		status = 'locked';
 		message = 'Locked.';
+	}
+
+	// --- admin ---
+
+	async function loadEntries() {
+		if (!adminToken) return;
+		busy = true;
+		entries = await listEntries(adminToken);
+		loaded = true;
+		busy = false;
+	}
+
+	async function onAddEntry() {
+		busy = true;
+		const { ok, status: code, id } = await createEntry(newLabel, newCombo, adminToken);
+		if (ok && id && newFile) {
+			const up = await uploadEntryFile(id, newFile, adminToken);
+			message = up.ok
+				? 'Combination added with file.'
+				: up.status === 415
+					? 'Combination added, but file was not a supported image.'
+					: 'Combination added, but file upload failed.';
+		} else if (ok) {
+			message = 'Combination added (no file yet).';
+		} else {
+			message =
+				code === 409
+					? 'That combination already exists.'
+					: code === 422
+						? `Combination must be ${rings} characters.`
+						: code === 403
+							? 'Admin token rejected.'
+							: 'Could not add combination.';
+		}
+		busy = false;
+		if (ok) {
+			newLabel = '';
+			newCombo = '';
+			newFile = null;
+			await loadEntries();
+			await refreshConfig();
+		}
+	}
+
+	async function onReplaceFile(id: string, e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		busy = true;
+		const { ok, status: code } = await uploadEntryFile(id, file, adminToken);
+		busy = false;
+		message = ok
+			? 'File replaced.'
+			: code === 415
+				? 'Not a supported image.'
+				: 'Replace failed.';
+		input.value = '';
+		await loadEntries();
+	}
+
+	async function onDelete(id: string, label: string) {
+		if (!confirm(`Delete combination "${label || id}" and its file?`)) return;
+		busy = true;
+		const { ok } = await deleteEntry(id, adminToken);
+		busy = false;
+		message = ok ? 'Combination deleted.' : 'Delete failed.';
+		await loadEntries();
+		await refreshConfig();
 	}
 </script>
 
@@ -111,37 +154,73 @@
 	<p class="message" aria-live="polite">{message}</p>
 
 	<details class="admin" bind:open={showAdmin}>
-		<summary>Change combination (admin)</summary>
+		<summary>Manage combinations (admin)</summary>
 		<div class="admin-body">
 			<p class="hint">
-				Requires the admin token configured on the server. The combination is hashed
-				server-side; the plaintext is never stored or returned.
+				Requires the admin token configured on the server. Each combination opens its
+				own file. Combinations are hashed server-side and sealed with ML-KEM-768 in
+				transit; the plaintext is never stored or returned.
 			</p>
-			<input type="password" placeholder="Admin token" bind:value={adminToken} />
 
-			<label class="filebtn admin-upload" class:disabled={busy || !adminToken}>
-				Upload / replace photo
+			<div class="row">
 				<input
-					type="file"
-					accept="image/*"
-					onchange={onAdminUpload}
-					disabled={busy || !adminToken}
+					type="password"
+					placeholder="Admin token"
+					bind:value={adminToken}
+					onkeydown={(e) => e.key === 'Enter' && loadEntries()}
 				/>
-			</label>
+				<button onclick={loadEntries} disabled={busy || !adminToken}>Load</button>
+			</div>
 
-			<hr />
+			{#if loaded}
+				<ul class="entries">
+					{#each entries as entry (entry.id)}
+						<li>
+							<span class="entry-label">
+								{entry.label || '(unnamed)'}
+								{#if !entry.has_file}<em class="nofile">no file</em>{/if}
+							</span>
+							<label class="filebtn small" class:disabled={busy}>
+								Replace file
+								<input
+									type="file"
+									accept="image/*"
+									onchange={(e) => onReplaceFile(entry.id, e)}
+									disabled={busy}
+								/>
+							</label>
+							<button class="danger" onclick={() => onDelete(entry.id, entry.label)} disabled={busy}>
+								Delete
+							</button>
+						</li>
+					{:else}
+						<li class="empty">No combinations yet — add one below.</li>
+					{/each}
+				</ul>
 
-			<input
-				type="text"
-				class="combo-input"
-				placeholder="New combination (e.g. APPLE)"
-				autocapitalize="characters"
-				value={newCombo}
-				oninput={(e) => (newCombo = e.currentTarget.value.toUpperCase())}
-			/>
-			<button onclick={onChangeCombo} disabled={busy || !adminToken || !newCombo}>
-				Set new combination
-			</button>
+				<hr />
+
+				<p class="hint">Add a new combination ({rings} characters):</p>
+				<input type="text" placeholder="Label (e.g. Birthday photo)" bind:value={newLabel} />
+				<input
+					type="text"
+					class="combo-input"
+					placeholder="Combination (e.g. APPLE)"
+					autocapitalize="characters"
+					value={newCombo}
+					oninput={(e) => (newCombo = e.currentTarget.value.toUpperCase())}
+				/>
+				<label class="filebtn admin-upload" class:disabled={busy}>
+					{newFile ? newFile.name : 'Choose file (optional)'}
+					<input
+						type="file"
+						accept="image/*"
+						onchange={(e) => (newFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+						disabled={busy}
+					/>
+				</label>
+				<button onclick={onAddEntry} disabled={busy || !newCombo}>Add combination</button>
+			{/if}
 		</div>
 	</details>
 </main>
@@ -261,5 +340,59 @@
 		border: none;
 		border-top: 1px solid #4a3826;
 		margin: 0.25rem 0;
+	}
+	.row {
+		display: flex;
+		gap: 0.5rem;
+	}
+	.row input {
+		flex: 1;
+	}
+	.entries {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+	.entries li {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		background: #1c140d;
+		border: 1px solid #4a3826;
+		border-radius: 6px;
+		padding: 0.4rem 0.6rem;
+	}
+	.entries li.empty {
+		justify-content: center;
+		color: #8a7355;
+		font-size: 0.85rem;
+	}
+	.entry-label {
+		flex: 1;
+		font-size: 0.9rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.nofile {
+		color: #8a7355;
+		font-size: 0.75rem;
+		margin-left: 0.35rem;
+	}
+	.filebtn.small,
+	button.danger {
+		padding: 0.35rem 0.7rem;
+		font-size: 0.8rem;
+	}
+	button.danger {
+		background: #5a2a2a;
+		color: #f0d4d4;
+	}
+	.filebtn.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 </style>

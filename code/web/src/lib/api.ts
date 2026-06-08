@@ -11,11 +11,17 @@ import { seal } from './crypto';
 const BASE: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
 let token: string | null = null;
-let scope: string | null = null;
 
 export interface CryptexConfig {
 	rings: number;
 	alphabet: string;
+}
+
+export interface Entry {
+	id: string;
+	label: string;
+	len: number;
+	has_file: boolean;
 }
 
 const DEFAULT_CONFIG: CryptexConfig = { rings: 5, alphabet: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' };
@@ -36,20 +42,15 @@ export async function getConfig(): Promise<CryptexConfig> {
 	return DEFAULT_CONFIG;
 }
 
-export function isUnlocked(): boolean {
-	return token !== null;
-}
-
-export function canWrite(): boolean {
-	return scope === 'read+write';
-}
-
 export function lock(): void {
 	token = null;
-	scope = null;
 }
 
-/** Submit a guess (sealed with ML-KEM-768). 200 = unlocked, 401 = wrong. */
+/**
+ * Submit a guess (sealed with ML-KEM-768). On 200 the token internally
+ * references whichever entry matched — the client never learns which one.
+ * 200 = unlocked, 401 = wrong.
+ */
 export async function unlock(guess: string): Promise<{ ok: boolean; rateLimited: boolean }> {
 	const env = await seal(BASE, guess);
 	const res = await fetch(`${BASE}/unlock`, {
@@ -60,7 +61,6 @@ export async function unlock(guess: string): Promise<{ ok: boolean; rateLimited:
 	if (res.status === 200) {
 		const data = await res.json();
 		token = data.token;
-		scope = data.scope;
 		return { ok: true, rateLimited: false };
 	}
 	return { ok: false, rateLimited: res.status === 429 };
@@ -84,23 +84,47 @@ export async function downloadPhoto(): Promise<boolean> {
 	return true;
 }
 
-/** Replace the protected photo (requires a write-scoped token). */
-export async function replacePhoto(file: File): Promise<{ ok: boolean; status: number }> {
-	if (!token) return { ok: false, status: 401 };
-	const res = await fetch(`${BASE}/photo`, {
-		method: 'PUT',
-		headers: { Authorization: `Bearer ${token}` },
-		body: file
+// --- admin entry management (all require the admin token) ---
+
+/** List entries (id, label, length, whether a file is uploaded). */
+export async function listEntries(adminToken: string): Promise<Entry[]> {
+	const res = await fetch(`${BASE}/entries`, {
+		headers: { Authorization: `Bearer ${adminToken}` }
 	});
-	return { ok: res.ok, status: res.status };
+	if (!res.ok) return [];
+	return res.json();
 }
 
-/** Upload/replace the photo using the admin token (no unlock required). */
-export async function adminUploadPhoto(
+/**
+ * Create a new combination (sealed with ML-KEM-768) with a label. Returns the
+ * new entry id, or a status: 409 = duplicate combo, 422 = wrong length.
+ */
+export async function createEntry(
+	label: string,
+	combination: string,
+	adminToken: string
+): Promise<{ ok: boolean; status: number; id?: string }> {
+	const combo = await seal(BASE, combination);
+	const res = await fetch(`${BASE}/entries`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${adminToken}`
+		},
+		body: JSON.stringify({ label, combo })
+	});
+	let id: string | undefined;
+	if (res.ok) id = (await res.json()).id;
+	return { ok: res.ok, status: res.status, id };
+}
+
+/** Upload/replace the file for an entry. */
+export async function uploadEntryFile(
+	id: string,
 	file: File,
 	adminToken: string
 ): Promise<{ ok: boolean; status: number }> {
-	const res = await fetch(`${BASE}/photo`, {
+	const res = await fetch(`${BASE}/entries/${id}/file`, {
 		method: 'PUT',
 		headers: { Authorization: `Bearer ${adminToken}` },
 		body: file
@@ -108,22 +132,14 @@ export async function adminUploadPhoto(
 	return { ok: res.ok, status: res.status };
 }
 
-/**
- * Change the combination. Requires the admin token (stronger than a read); the
- * new combination is sealed with ML-KEM-768 before sending.
- */
-export async function changeCombination(
-	newCombination: string,
+/** Delete an entry (its combination and file). */
+export async function deleteEntry(
+	id: string,
 	adminToken: string
 ): Promise<{ ok: boolean; status: number }> {
-	const env = await seal(BASE, newCombination);
-	const res = await fetch(`${BASE}/password`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${adminToken}`
-		},
-		body: JSON.stringify(env)
+	const res = await fetch(`${BASE}/entries/${id}`, {
+		method: 'DELETE',
+		headers: { Authorization: `Bearer ${adminToken}` }
 	});
 	return { ok: res.ok, status: res.status };
 }

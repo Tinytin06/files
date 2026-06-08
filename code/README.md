@@ -9,19 +9,37 @@ code/                     <- make THIS the git repo root
 │   ├── src/lib/Cryptex.svelte   the rotatable cryptex widget
 │   ├── src/lib/api.ts           REST client (status codes only)
 │   ├── src/lib/crypto.ts        ML-KEM-768 sealing of the secret
-│   └── src/routes/+page.svelte  unlock / download / change-combo UI
+│   └── src/routes/+page.svelte  unlock / download / manage-entries UI
 ├── server/               Go REST API (the Docker process)
-│   ├── handlers.go       /api/unlock, /api/photo (GET/PUT), /api/password
+│   ├── handlers.go       /api/unlock, /api/photo, /api/entries CRUD
 │   ├── kem.go            ML-KEM-768 key + envelope decryption
 │   ├── hash.go           argon2id + constant-time verify
-│   ├── token.go          HMAC-signed scoped tokens (no JWT dep)
-│   ├── store.go          password hash + photo on the mounted volume
+│   ├── token.go          HMAC-signed tokens (entry-scoped, no JWT dep)
+│   ├── store.go          entries (hash + file + meta) on the mounted volume
+│   ├── migrate.go        one-time legacy → entry migration
 │   ├── ratelimit.go      per-client exponential backoff on /api/unlock
 │   └── image.go          magic-byte image validation
 ├── Dockerfile            builds web + server into one tiny distroless image
 ├── docker-compose.yml    local run + TrueNAS reference (ports/volume/env)
 └── .github/workflows/    CI: build & push image to GHCR for TrueNAS to pull
 ```
+
+## Multiple combinations, multiple files
+
+The cryptex holds a set of **entries**, each one combination → one file. A
+visitor dials the rings and submits; if the guess matches *any* entry, the
+server returns a token bound to that entry and `GET /api/photo` streams that
+entry's file. Wrong guesses are an identical `401` — nothing reveals how many
+entries exist or which one matched.
+
+- All combinations share one length (= the ring count); the first entry sets it,
+  later ones must match (`422` otherwise). Duplicate combinations are rejected
+  (`409`).
+- Each entry has an admin-only **label**; labels are returned only to
+  admin-token requests, never to the unlock flow.
+- On the volume: `entries/<id>/{combo.hash, meta.json, file.bin}`. A legacy
+  single `password.hash`+`photo` is migrated into a `default` entry on first
+  start.
 
 ## How "website + mobile from one codebase" works
 
@@ -43,20 +61,19 @@ Both only ever observe HTTP status codes. The password never reaches the client.
   secret to it, encrypts the value with **AES-256-GCM** under that secret, and
   posts `{ kem, nonce, ciphertext }`. Only the server's private key can
   decapsulate. This protects the password even if TLS were stripped.
-- `POST /api/unlock` → `200` + scoped token on the right guess, identical empty
-  `401` on every wrong one, with a uniform minimum response time. After
-  decryption the guess is argon2id-hashed and compared in constant time. No
-  hint, no partial match.
-- Combination is stored only as a salted argon2id hash on the mounted volume.
-- The photo is reachable **only** via the token-checked `/api/photo` — never a
-  static/guessable URL.
-- `PUT /api/photo` needs a write-scoped unlock token **or** the `ADMIN_TOKEN`
-  (so the owner can seed the photo without unlocking). It validates by magic
-  bytes (not the extension), caps size, and replaces atomically (temp + rename).
-  The admin upload control lives in the UI's "admin" panel.
-- `POST /api/password` sits behind the `ADMIN_TOKEN` **and** takes the new
-  combination as an ML-KEM-768 sealed envelope. The UI's admin panel forces the
-  combination to uppercase (matching the default A–Z rings).
+- `POST /api/unlock` → `200` + an entry-scoped token on a matching guess,
+  identical empty `401` otherwise, with a uniform minimum response time. The
+  guess is checked against **every** entry with no early break, so timing never
+  reveals which (or whether an early) entry matched. After decryption each
+  comparison is argon2id-hashed and constant-time. No hint, no partial match.
+- Combinations are stored only as salted argon2id hashes on the mounted volume.
+- Each file is reachable **only** via the token-checked `/api/photo`, keyed to
+  the token's entry — never a static/guessable URL.
+- Entry management (`GET/POST /api/entries`, `PUT /api/entries/{id}/file`,
+  `DELETE /api/entries/{id}`) sits behind the `ADMIN_TOKEN`. New combinations
+  arrive as ML-KEM-768 sealed envelopes; the UI forces them to uppercase
+  (matching the default A–Z rings). Uploads are validated by magic bytes (not the
+  extension), size-capped, and written atomically (temp + rename).
 - Per-client exponential backoff on `/api/unlock`.
 
 > The ML-KEM key seed persists on the mounted volume (`kem.seed`) so the public
@@ -79,7 +96,9 @@ npm install
 npm run dev   # http://localhost:5173
 ```
 
-Dial `A P P L E` and hit Unlock → `200`. Anything else → `401`.
+Dial `A P P L E` and hit Unlock → `200`. Anything else → `401`. To add more
+combinations, expand **Manage combinations (admin)**, enter `ADMIN_TOKEN`
+(`dev`), **Load**, then add a label + 5-char combination + file.
 
 Or the whole thing as the container does it:
 
@@ -109,12 +128,12 @@ with `cap add` on any machine.
 | Var | Default | Purpose |
 |-----|---------|---------|
 | `LISTEN_ADDR` | `:8080` | Address the API listens on |
-| `DATA_DIR` | `/data` | Mounted volume: password hash + photo |
+| `DATA_DIR` | `/data` | Mounted volume: entries (hashes + files) + kem.seed |
 | `WEB_DIR` | `/app/web` | Built SPA to serve (set in the image) |
 | `TOKEN_SIGNING_KEY` | *(ephemeral)* | **Set a stable secret** or restarts invalidate tokens |
-| `ADMIN_TOKEN` | *(unset → endpoint disabled)* | Auth for `POST /api/password` |
-| `CRYPTEX_INIT_PASSWORD` | — | One-time combo bootstrap on first start |
-| `CRYPTEX_RINGS` | `5` | Number of rings — set to your combination's length |
+| `ADMIN_TOKEN` | *(unset → admin disabled)* | Auth for all `/api/entries` management |
+| `CRYPTEX_INIT_PASSWORD` | — | One-time `default` entry bootstrap on first start |
+| `CRYPTEX_RINGS` | `5` | Ring count before any entry exists (then the entries' length wins) |
 | `CRYPTEX_ALPHABET` | `A–Z` | Characters each ring can dial (e.g. `0123456789`) |
 | `MAX_UPLOAD_BYTES` | `10485760` | Upload size cap |
 | `TOKEN_TTL_SECONDS` | `600` | Unlock token lifetime |
@@ -144,11 +163,11 @@ with `cap add` on any machine.
    built-in) so the public URL is HTTPS. The app honors `X-Forwarded-For` for
    rate limiting.
 
-After deploy, change the combination from the **admin panel in the web UI**
-(expand "Change combination (admin)", paste the `ADMIN_TOKEN`, type the new
-combination — it's forced to uppercase, sealed with ML-KEM-768, and sent). A
-raw `curl` no longer works because the endpoint expects a sealed envelope, not
-plaintext JSON.
+After deploy, manage combinations from the **admin panel in the web UI**
+(expand "Manage combinations (admin)", paste the `ADMIN_TOKEN`, click **Load**).
+From there you can add a combination + file, replace an entry's file, or delete
+an entry. Combinations are forced to uppercase and sealed with ML-KEM-768, so a
+raw `curl` won't work for adds — use the panel.
 
 See the specs in the parent folder (`../API.md`, `../ARCHITECTURE.md`,
 `../DEPLOYMENT.md`) for the full contract this implements.
