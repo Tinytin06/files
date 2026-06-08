@@ -41,8 +41,10 @@ Both only ever observe HTTP status codes. The password never reaches the client.
 - Combination is stored only as a salted argon2id hash on the mounted volume.
 - The photo is reachable **only** via the token-checked `/api/photo` — never a
   static/guessable URL.
-- `PUT /api/photo` needs a write-scoped token, validates by magic bytes (not the
-  extension), caps size, and replaces atomically (temp file + rename).
+- `PUT /api/photo` needs a write-scoped unlock token **or** the `ADMIN_TOKEN`
+  (so the owner can seed the photo without unlocking). It validates by magic
+  bytes (not the extension), caps size, and replaces atomically (temp + rename).
+  The admin upload control lives in the UI's "admin" panel.
 - `POST /api/password` sits behind the `ADMIN_TOKEN` — a stronger bar than a read.
 - Per-client exponential backoff on `/api/unlock`.
 
