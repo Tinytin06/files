@@ -5,6 +5,7 @@
 		unlock,
 		downloadPhoto,
 		replacePhoto,
+		adminUploadPhoto,
 		changeCombination,
 		getConfig,
 		canWrite,
@@ -69,6 +70,23 @@
 		input.value = '';
 	}
 
+	async function onAdminUpload(e: Event) {
+		const input = e.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		busy = true;
+		const { ok, status: code } = await adminUploadPhoto(file, adminToken);
+		busy = false;
+		message = ok
+			? 'Photo uploaded.'
+			: code === 403
+				? 'Admin token rejected.'
+				: code === 415
+					? 'Not a supported image.'
+					: 'Upload failed.';
+		input.value = '';
+	}
+
 	async function onChangeCombo() {
 		busy = true;
 		const { ok, status: code } = await changeCombination(newCombo, adminToken);
@@ -121,6 +139,19 @@
 				server-side; the plaintext is never stored or returned.
 			</p>
 			<input type="password" placeholder="Admin token" bind:value={adminToken} />
+
+			<label class="filebtn admin-upload" class:disabled={busy || !adminToken}>
+				Upload / replace photo
+				<input
+					type="file"
+					accept="image/*"
+					onchange={onAdminUpload}
+					disabled={busy || !adminToken}
+				/>
+			</label>
+
+			<hr />
+
 			<input type="text" placeholder="New combination (e.g. APPLE)" bind:value={newCombo} />
 			<button onclick={onChangeCombo} disabled={busy || !adminToken || !newCombo}>
 				Set new combination
@@ -227,5 +258,18 @@
 		color: #8a7355;
 		margin: 0;
 		line-height: 1.4;
+	}
+	.admin-upload {
+		text-align: center;
+	}
+	.admin-upload.disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.admin-body hr {
+		width: 100%;
+		border: none;
+		border-top: 1px solid #4a3826;
+		margin: 0.25rem 0;
 	}
 </style>

@@ -90,13 +90,15 @@ func (a *App) handlePhotoGet(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// PUT /api/photo — requires a write-scoped token.
+// PUT /api/photo — requires a write-scoped unlock token OR the admin token.
+// The admin path lets the owner seed/replace the photo without solving the
+// cryptex first.
 func (a *App) handlePhotoPut(w http.ResponseWriter, r *http.Request) {
-	c, ok := a.requireToken(w, r, true)
-	if !ok {
-		return
+	if !a.adminAuthorized(r) {
+		if _, ok := a.requireToken(w, r, true); !ok {
+			return
+		}
 	}
-	_ = c
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, a.cfg.UploadMax))
 	if err != nil {
 		http.Error(w, "", http.StatusRequestEntityTooLarge)

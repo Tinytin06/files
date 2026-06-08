@@ -91,6 +91,19 @@ export async function replacePhoto(file: File): Promise<{ ok: boolean; status: n
 	return { ok: res.ok, status: res.status };
 }
 
+/** Upload/replace the photo using the admin token (no unlock required). */
+export async function adminUploadPhoto(
+	file: File,
+	adminToken: string
+): Promise<{ ok: boolean; status: number }> {
+	const res = await fetch(`${BASE}/photo`, {
+		method: 'PUT',
+		headers: { Authorization: `Bearer ${adminToken}` },
+		body: file
+	});
+	return { ok: res.ok, status: res.status };
+}
+
 /** Change the combination. Requires the admin token (stronger than a read). */
 export async function changeCombination(
 	newCombination: string,
