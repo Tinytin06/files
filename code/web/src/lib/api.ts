@@ -10,6 +10,29 @@ const BASE: string = import.meta.env.VITE_API_BASE_URL ?? '/api';
 let token: string | null = null;
 let scope: string | null = null;
 
+export interface CryptexConfig {
+	rings: number;
+	alphabet: string;
+}
+
+const DEFAULT_CONFIG: CryptexConfig = { rings: 5, alphabet: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' };
+
+/** Fetch the UI shape (ring count + alphabet) from the server. */
+export async function getConfig(): Promise<CryptexConfig> {
+	try {
+		const res = await fetch(`${BASE}/config`);
+		if (res.ok) {
+			const c = await res.json();
+			if (typeof c.rings === 'number' && typeof c.alphabet === 'string' && c.alphabet) {
+				return c;
+			}
+		}
+	} catch {
+		// fall through to default
+	}
+	return DEFAULT_CONFIG;
+}
+
 export function isUnlocked(): boolean {
 	return token !== null;
 }

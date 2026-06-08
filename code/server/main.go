@@ -32,6 +32,11 @@ type Config struct {
 	UploadMax    int64
 	TokenTTL     time.Duration
 	MinUnlockDur time.Duration
+	// UI shape, served to the client via GET /api/config. Set CRYPTEX_RINGS to
+	// match your combination's length, and CRYPTEX_ALPHABET to the characters
+	// the rings can dial. Neither reveals the password value.
+	Rings    int
+	Alphabet string
 }
 
 func loadConfig() Config {
@@ -43,6 +48,8 @@ func loadConfig() Config {
 		UploadMax:    envInt64("MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
 		TokenTTL:     time.Duration(envInt64("TOKEN_TTL_SECONDS", 600)) * time.Second,
 		MinUnlockDur: time.Duration(envInt64("MIN_UNLOCK_MS", 250)) * time.Millisecond,
+		Rings:        int(envInt64("CRYPTEX_RINGS", 5)),
+		Alphabet:     env("CRYPTEX_ALPHABET", "ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
 	}
 }
 
@@ -83,6 +90,7 @@ func main() {
 	mux.HandleFunc("GET /api/photo", app.handlePhotoGet)
 	mux.HandleFunc("PUT /api/photo", app.handlePhotoPut)
 	mux.HandleFunc("POST /api/password", app.handlePassword)
+	mux.HandleFunc("GET /api/config", app.handleConfig)
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

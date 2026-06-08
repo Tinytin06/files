@@ -143,6 +143,18 @@ func (a *App) handlePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+type configResponse struct {
+	Rings    int    `json:"rings"`
+	Alphabet string `json:"alphabet"`
+}
+
+// GET /api/config — UI shape only (ring count + dialable characters). Carries
+// no secret: it describes the cryptex, not the combination.
+func (a *App) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(configResponse{Rings: a.cfg.Rings, Alphabet: a.cfg.Alphabet})
+}
+
 // --- helpers ---
 
 // unauthorized emits the single canonical 401: empty body, uniform timing.

@@ -1,11 +1,12 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Cryptex from '$lib/Cryptex.svelte';
 	import {
 		unlock,
 		downloadPhoto,
 		replacePhoto,
 		changeCombination,
-		isUnlocked,
+		getConfig,
 		canWrite,
 		lock
 	} from '$lib/api';
@@ -13,6 +14,16 @@
 	let status = $state<'locked' | 'unlocked'>('locked');
 	let message = $state('Rotate the rings and unlock.');
 	let busy = $state(false);
+
+	// UI shape comes from the server (set via CRYPTEX_RINGS / CRYPTEX_ALPHABET).
+	let rings = $state(5);
+	let alphabet = $state('ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+
+	onMount(async () => {
+		const c = await getConfig();
+		rings = c.rings;
+		alphabet = c.alphabet;
+	});
 
 	// admin / change-combination panel
 	let showAdmin = $state(false);
@@ -81,7 +92,7 @@
 	<h1>Cryptex</h1>
 
 	{#if status === 'locked'}
-		<Cryptex rings={5} disabled={busy} onsubmit={onSubmit} />
+		<Cryptex {rings} {alphabet} disabled={busy} onsubmit={onSubmit} />
 	{:else}
 		<section class="vault">
 			<p class="unlocked-banner">🔓 Unlocked</p>
