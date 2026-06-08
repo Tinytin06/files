@@ -100,6 +100,8 @@ with `cap add` on any machine.
 | `TOKEN_SIGNING_KEY` | *(ephemeral)* | **Set a stable secret** or restarts invalidate tokens |
 | `ADMIN_TOKEN` | *(unset → endpoint disabled)* | Auth for `POST /api/password` |
 | `CRYPTEX_INIT_PASSWORD` | — | One-time combo bootstrap on first start |
+| `CRYPTEX_RINGS` | `5` | Number of rings — set to your combination's length |
+| `CRYPTEX_ALPHABET` | `A–Z` | Characters each ring can dial (e.g. `0123456789`) |
 | `MAX_UPLOAD_BYTES` | `10485760` | Upload size cap |
 | `TOKEN_TTL_SECONDS` | `600` | Unlock token lifetime |
 | `MIN_UNLOCK_MS` | `250` | Uniform minimum unlock response time |

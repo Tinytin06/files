@@ -22,6 +22,9 @@ services:
       ADMIN_TOKEN: "change-me-too"
       # Optional one-time bootstrap of the combination on first start.
       # CRYPTEX_INIT_PASSWORD: "APPLE"
+      # Cryptex shape: rings must equal your combination length.
+      CRYPTEX_RINGS: "5"
+      CRYPTEX_ALPHABET: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
       MAX_UPLOAD_BYTES: "10485760"
       TOKEN_TTL_SECONDS: "600"
       MIN_UNLOCK_MS: "250"
