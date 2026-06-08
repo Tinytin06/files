@@ -16,21 +16,33 @@
 		onsubmit
 	}: Props = $props();
 
-	const chars = alphabet.split('');
-	// Index into `chars` for each ring.
-	let positions = $state<number[]>(Array(rings).fill(0));
+	// chars reacts to the alphabet prop (which arrives from the server).
+	const chars = $derived(alphabet.split(''));
 
-	const guess = $derived(positions.map((p) => chars[p]).join(''));
+	// One index per ring. Resize when the ring count changes (e.g. after the
+	// server reports a new combination length), preserving existing positions.
+	let positions = $state<number[]>(Array(rings).fill(0));
+	$effect(() => {
+		if (positions.length !== rings) {
+			const next = Array(rings).fill(0);
+			for (let i = 0; i < Math.min(positions.length, rings); i++) next[i] = positions[i];
+			positions = next;
+		}
+	});
+
+	const guess = $derived(positions.map((p) => chars[p] ?? '').join(''));
 
 	function rotate(ring: number, delta: number) {
 		if (disabled) return;
 		const n = chars.length;
-		positions[ring] = (positions[ring] + delta + n) % n;
+		if (n === 0) return;
+		positions[ring] = ((positions[ring] ?? 0) + delta + n) % n;
 	}
 
 	function charAt(ring: number, offset: number): string {
 		const n = chars.length;
-		return chars[(positions[ring] + offset + n) % n];
+		if (n === 0) return '';
+		return chars[(((positions[ring] ?? 0) + offset) % n + n) % n];
 	}
 
 	function onWheel(ring: number, e: WheelEvent) {
