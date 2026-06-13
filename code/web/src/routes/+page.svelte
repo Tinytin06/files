@@ -42,23 +42,29 @@
 	async function onSubmit(guess: string) {
 		busy = true;
 		message = 'Checking…';
-		const { ok, rateLimited } = await unlock(guess);
-		busy = false;
-		if (ok) {
-			status = 'unlocked';
-			message = 'Unlocked.';
-		} else if (rateLimited) {
-			message = 'Too many attempts — slow down and try again.';
-		} else {
-			message = 'Wrong combination.';
+		try {
+			const { ok, rateLimited } = await unlock(guess);
+			if (ok) {
+				status = 'unlocked';
+				message = 'Unlocked.';
+			} else if (rateLimited) {
+				message = 'Too many attempts — slow down and try again.';
+			} else {
+				message = 'Wrong combination.';
+			}
+		} finally {
+			busy = false;
 		}
 	}
 
 	async function onDownload() {
 		busy = true;
-		const ok = await downloadPhoto();
-		busy = false;
-		message = ok ? 'File downloaded.' : 'Download failed (token may have expired).';
+		try {
+			const ok = await downloadPhoto();
+			message = ok ? 'File downloaded.' : 'Download failed (token may have expired).';
+		} finally {
+			busy = false;
+		}
 	}
 
 	function onLock() {
@@ -72,32 +78,40 @@
 	async function loadEntries() {
 		if (!adminToken) return;
 		busy = true;
-		entries = await listEntries(adminToken);
-		loaded = true;
-		busy = false;
+		try {
+			entries = await listEntries(adminToken);
+			loaded = true;
+		} finally {
+			busy = false;
+		}
 	}
 
 	async function onAddEntry() {
 		busy = true;
-		const { ok, status: code, id } = await createEntry(newLabel, newCombo, adminToken);
-		if (ok && id && newFile) {
-			const up = await uploadEntryFile(id, newFile, adminToken);
-			message = up.ok
-				? 'Combination added with file.'
-				: 'Combination added, but file upload failed.';
-		} else if (ok) {
-			message = 'Combination added (no file yet).';
-		} else {
-			message =
-				code === 409
-					? 'That combination already exists.'
-					: code === 422
-						? `Combination must be ${rings} characters.`
-						: code === 403
-							? 'Admin token rejected.'
-							: 'Could not add combination.';
+		let ok = false;
+		try {
+			const res = await createEntry(newLabel, newCombo, adminToken);
+			ok = res.ok;
+			if (res.ok && res.id && newFile) {
+				const up = await uploadEntryFile(res.id, newFile, adminToken);
+				message = up.ok
+					? 'Combination added with file.'
+					: 'Combination added, but file upload failed.';
+			} else if (res.ok) {
+				message = 'Combination added (no file yet).';
+			} else {
+				message =
+					res.status === 409
+						? 'That combination already exists.'
+						: res.status === 422
+							? `Combination must be ${rings} characters.`
+							: res.status === 403
+								? 'Admin token rejected.'
+								: 'Could not add combination.';
+			}
+		} finally {
+			busy = false;
 		}
-		busy = false;
 		if (ok) {
 			newLabel = '';
 			newCombo = '';
@@ -112,9 +126,12 @@
 		const file = input.files?.[0];
 		if (!file) return;
 		busy = true;
-		const { ok } = await uploadEntryFile(id, file, adminToken);
-		busy = false;
-		message = ok ? 'File replaced.' : 'Replace failed.';
+		try {
+			const { ok } = await uploadEntryFile(id, file, adminToken);
+			message = ok ? 'File replaced.' : 'Replace failed.';
+		} finally {
+			busy = false;
+		}
 		input.value = '';
 		await loadEntries();
 	}
@@ -122,9 +139,12 @@
 	async function onDelete(id: string, label: string) {
 		if (!confirm(`Delete combination "${label || id}" and its file?`)) return;
 		busy = true;
-		const { ok } = await deleteEntry(id, adminToken);
-		busy = false;
-		message = ok ? 'Combination deleted.' : 'Delete failed.';
+		try {
+			const { ok } = await deleteEntry(id, adminToken);
+			message = ok ? 'Combination deleted.' : 'Delete failed.';
+		} finally {
+			busy = false;
+		}
 		await loadEntries();
 		await refreshConfig();
 	}

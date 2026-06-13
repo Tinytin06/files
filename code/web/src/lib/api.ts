@@ -52,18 +52,25 @@ export function lock(): void {
  * 200 = unlocked, 401 = wrong.
  */
 export async function unlock(guess: string): Promise<{ ok: boolean; rateLimited: boolean }> {
-	const env = await seal(BASE, guess);
-	const res = await fetch(`${BASE}/unlock`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(env)
-	});
-	if (res.status === 200) {
-		const data = await res.json();
-		token = data.token;
-		return { ok: true, rateLimited: false };
+	try {
+		const env = await seal(BASE, guess);
+		const res = await fetch(`${BASE}/unlock`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(env)
+		});
+		if (res.status === 200) {
+			const data = await res.json();
+			token = data.token;
+			return { ok: true, rateLimited: false };
+		}
+		return { ok: false, rateLimited: res.status === 429 };
+	} catch {
+		// Network/crypto failure (e.g. server unreachable, or crypto.subtle
+		// unavailable on a non-secure origin). Treat as a failed attempt rather
+		// than letting the rejection escape and freeze the UI.
+		return { ok: false, rateLimited: false };
 	}
-	return { ok: false, rateLimited: res.status === 429 };
 }
 
 /** Download the protected photo and trigger a browser save. */
