@@ -5,7 +5,15 @@
 // the value, and send { kem, nonce, ciphertext }. Only the server's private key
 // can decapsulate the shared secret, so the password is protected even if TLS
 // were stripped. The plaintext never appears in the request body.
+//
+// AES-GCM uses a pure-JS implementation (@noble/ciphers), NOT the Web Crypto
+// `crypto.subtle` API. `crypto.subtle` is only available in a secure context
+// (HTTPS or localhost); on a plain-HTTP LAN deployment (e.g. http://<nas-ip>)
+// it is undefined and any seal would throw before sending. Since this app is
+// meant to run on a LAN and the ML-KEM envelope is what actually protects the
+// secret, the sealing must not depend on the transport being a secure context.
 import { ml_kem768 } from '@noble/post-quantum/ml-kem.js';
+import { gcm } from '@noble/ciphers/aes.js';
 
 export interface Envelope {
 	kem: string;
@@ -30,15 +38,10 @@ export async function seal(base: string, plaintext: string): Promise<Envelope> {
 	const pk = await publicKey(base);
 	const { cipherText, sharedSecret } = ml_kem768.encapsulate(pk);
 
-	const key = await crypto.subtle.importKey('raw', sharedSecret, 'AES-GCM', false, ['encrypt']);
+	// AES-256-GCM under the 32-byte shared secret. noble's gcm().encrypt returns
+	// ciphertext||tag (16-byte tag), matching Go's crypto/cipher GCM Seal output.
 	const nonce = crypto.getRandomValues(new Uint8Array(12));
-	const ct = new Uint8Array(
-		await crypto.subtle.encrypt(
-			{ name: 'AES-GCM', iv: nonce },
-			key,
-			new TextEncoder().encode(plaintext)
-		)
-	);
+	const ct = gcm(sharedSecret, nonce).encrypt(new TextEncoder().encode(plaintext));
 
 	return {
 		kem: bytesToB64(cipherText),
