@@ -118,7 +118,7 @@ export async function createEntry(
 	return { ok: res.ok, status: res.status, id };
 }
 
-/** Upload/replace the file for an entry. */
+/** Upload/replace the file for an entry. Any file type is accepted. */
 export async function uploadEntryFile(
 	id: string,
 	file: File,
@@ -126,7 +126,12 @@ export async function uploadEntryFile(
 ): Promise<{ ok: boolean; status: number }> {
 	const res = await fetch(`${BASE}/entries/${id}/file`, {
 		method: 'PUT',
-		headers: { Authorization: `Bearer ${adminToken}` },
+		headers: {
+			Authorization: `Bearer ${adminToken}`,
+			// Percent-encoded so non-ASCII names survive the header; the server
+			// sanitizes it. Lets the download preserve the original filename.
+			'X-Filename': encodeURIComponent(file.name)
+		},
 		body: file
 	});
 	return { ok: res.ok, status: res.status };

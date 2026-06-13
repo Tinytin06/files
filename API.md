@@ -19,22 +19,30 @@ Server logic: hash the guess, constant-time compare to the stored hash.
 
 ## GET /api/photo
 
-Download the protected photo.
+Download the protected file (any type — image, document, archive, …).
 
 - Auth: a valid unlock token (any scope).
-- `200 OK` — streams the image bytes with
-  `Content-Disposition: attachment; filename="..."`.
+- `200 OK` — streams the file bytes with
+  `Content-Disposition: attachment; filename="..."` (plus an RFC 5987
+  `filename*` for non-ASCII names) and `X-Content-Type-Options: nosniff`, so the
+  browser always saves the file rather than rendering it inline.
 - `401 Unauthorized` — missing/invalid token.
 
 ## PUT /api/photo
 
-Replace the protected photo.
+Replace the protected file. Any file type is accepted.
 
 - Auth: an unlock token **with write scope**.
-- Request body: the new image bytes.
-- Server: validate content type + magic bytes (do not trust the extension),
-  cap file size, write to a temp file, atomically rename over the old file.
+- Request body: the new file bytes.
+- Original filename: sent in the `X-Filename` header, percent-encoded. The
+  server sanitizes it (strips path components, control characters, and quotes)
+  and uses it for the eventual download; it falls back to a generic name if
+  absent. The extension/bytes determine the stored content type.
+- Server: cap file size, write to a temp file, atomically rename over the old
+  file. Files are only ever served as `attachment` with `nosniff`, so accepting
+  arbitrary types does not expose an inline-render/XSS vector.
 - `200 OK` — replaced.
+- `400 Bad Request` — empty body.
 - `401 Unauthorized` — bad/missing token.
 - `403 Forbidden` — token is read-only.
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -97,8 +98,7 @@ func (a *App) handlePhotoGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=%q", meta.Filename))
+	w.Header().Set("Content-Disposition", contentDisposition(meta.Filename))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)
 }
@@ -197,12 +197,19 @@ func (a *App) handleEntryFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusRequestEntityTooLarge)
 		return
 	}
-	ct, ext, valid := detectImage(body)
-	if !valid {
-		http.Error(w, "unsupported image type", http.StatusUnsupportedMediaType)
+	if len(body) == 0 {
+		http.Error(w, "empty file", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.WriteEntryFile(id, body, ct, "secret"+ext); err != nil {
+	// Any file type is allowed. The client sends the original name in X-Filename
+	// (percent-encoded so non-ASCII names survive the header). We sanitize it
+	// against traversal/header injection and fall back to a generic name.
+	filename := sanitizeFilename(decodeFilename(r.Header.Get("X-Filename")))
+	ct := contentTypeFor(filename, body)
+	if filename == "" {
+		filename = "secret" + extForType(ct)
+	}
+	if err := a.store.WriteEntryFile(id, body, ct, filename); err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
@@ -285,6 +292,35 @@ func (a *App) adminAuthorized(r *http.Request) bool {
 		return false // admin endpoint disabled until a token is configured
 	}
 	return constTimeEqualStr(bearer(r), a.cfg.AdminToken)
+}
+
+// contentDisposition builds an attachment header with both a plain ASCII
+// filename (broad compatibility) and an RFC 5987 filename* (so non-ASCII names
+// survive). The stored name is already sanitized of quotes/control characters.
+func contentDisposition(name string) string {
+	ascii := strings.Map(func(r rune) rune {
+		if r < 0x20 || r > 0x7e {
+			return '_'
+		}
+		return r
+	}, name)
+	if ascii == "" {
+		ascii = "download"
+	}
+	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
+		ascii, url.PathEscape(name))
+}
+
+// decodeFilename undoes the percent-encoding the client applies to X-Filename.
+// Falls back to the raw header if it isn't valid encoding.
+func decodeFilename(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if dec, err := url.QueryUnescape(raw); err == nil {
+		return dec
+	}
+	return raw
 }
 
 func bearer(r *http.Request) string {

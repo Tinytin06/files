@@ -70,8 +70,11 @@ endpoint contract.
   `Content-Disposition: attachment; filename="..."` so the browser saves it
   rather than rendering inline.
 - Change photo (`PUT /api/photo`) requires the **write scope** on the token.
-  Validate content type + magic bytes (not the extension), cap file size, write
-  to a temp file and atomically rename over the old one.
+  Any file type is accepted. Cap file size, sanitize the client-supplied
+  filename (no path components, control chars, or quotes), write to a temp file
+  and atomically rename over the old one. Arbitrary types are safe because the
+  download endpoint always serves `Content-Disposition: attachment` with
+  `X-Content-Type-Options: nosniff` — files are saved, never rendered inline.
 - Change password (`POST /api/password`) must sit behind stronger auth than a
   plain read — an unlocked session, an admin token, or re-solving the cryptex.
   The new value is hashed and overwrites the stored hash.
@@ -118,7 +121,7 @@ See `docs/DEPLOYMENT.md` for the Dockerfile sketch and TrueNAS app config notes.
 - [ ] Rate limiting / backoff on `/api/unlock` (small keyspace invites brute force).
 - [ ] TLS in front of the API.
 - [ ] `/api/password` behind stronger auth than a read.
-- [ ] Uploads validated (magic bytes, size cap, atomic replace).
+- [ ] Uploads handled safely (filename sanitized, size cap, atomic replace, served as attachment + nosniff).
 - [ ] Photo + hash on a mounted volume, outside the image and any web root.
 
 ## Conventions

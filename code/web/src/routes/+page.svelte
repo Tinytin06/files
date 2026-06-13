@@ -84,9 +84,7 @@
 			const up = await uploadEntryFile(id, newFile, adminToken);
 			message = up.ok
 				? 'Combination added with file.'
-				: up.status === 415
-					? 'Combination added, but file was not a supported image.'
-					: 'Combination added, but file upload failed.';
+				: 'Combination added, but file upload failed.';
 		} else if (ok) {
 			message = 'Combination added (no file yet).';
 		} else {
@@ -114,13 +112,9 @@
 		const file = input.files?.[0];
 		if (!file) return;
 		busy = true;
-		const { ok, status: code } = await uploadEntryFile(id, file, adminToken);
+		const { ok } = await uploadEntryFile(id, file, adminToken);
 		busy = false;
-		message = ok
-			? 'File replaced.'
-			: code === 415
-				? 'Not a supported image.'
-				: 'Replace failed.';
+		message = ok ? 'File replaced.' : 'Replace failed.';
 		input.value = '';
 		await loadEntries();
 	}
@@ -184,7 +178,6 @@
 								Replace file
 								<input
 									type="file"
-									accept="image/*"
 									onchange={(e) => onReplaceFile(entry.id, e)}
 									disabled={busy}
 								/>
@@ -214,7 +207,6 @@
 					{newFile ? newFile.name : 'Choose file (optional)'}
 					<input
 						type="file"
-						accept="image/*"
 						onchange={(e) => (newFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
 						disabled={busy}
 					/>

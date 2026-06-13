@@ -1,9 +1,18 @@
 package main
 
-// Image type detection by magic bytes — we never trust a client-supplied
-// extension or Content-Type header when accepting an upload.
+// File handling for uploads. Any file type is accepted: the download endpoint
+// always serves with `Content-Disposition: attachment` + `X-Content-Type-Options:
+// nosniff`, so a stored file is saved by the browser, never rendered inline.
+// We still never trust the upload blindly — the filename is sanitized against
+// path traversal/header injection and the body is size-capped by the handler.
 
-import "bytes"
+import (
+	"bytes"
+	"mime"
+	"net/http"
+	"path/filepath"
+	"strings"
+)
 
 var imageMagic = []struct {
 	ct    string
@@ -17,7 +26,8 @@ var imageMagic = []struct {
 }
 
 // detectImage returns the content type and extension if data is a supported
-// image, or ok=false otherwise. WEBP is handled separately (RIFF container).
+// image, or ok=false otherwise. Still used by the legacy migration to label an
+// old photo that predates stored metadata. WEBP is the RIFF container case.
 func detectImage(data []byte) (ct, ext string, ok bool) {
 	for _, m := range imageMagic {
 		if bytes.HasPrefix(data, m.magic) {
@@ -43,4 +53,45 @@ func extForType(ct string) string {
 	default:
 		return ".bin"
 	}
+}
+
+// contentTypeFor picks a content type for an arbitrary uploaded file. It prefers
+// the filename extension's registered MIME type (stable and predictable for the
+// eventual download) and falls back to sniffing the bytes, then octet-stream.
+func contentTypeFor(filename string, data []byte) string {
+	if ext := filepath.Ext(filename); ext != "" {
+		if ct := mime.TypeByExtension(ext); ct != "" {
+			// Strip any "; charset=..." parameter for a clean stored value.
+			if i := strings.IndexByte(ct, ';'); i >= 0 {
+				ct = strings.TrimSpace(ct[:i])
+			}
+			return ct
+		}
+	}
+	return http.DetectContentType(data) // never empty; octet-stream when unknown
+}
+
+// sanitizeFilename reduces a client-supplied name to a single safe path segment:
+// no directory components, no control characters, and no quotes that could break
+// out of the Content-Disposition header. Returns "" if nothing usable remains.
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	// Keep only the final path segment, regardless of separator style.
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == '"' {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." {
+		return ""
+	}
+	if r := []rune(name); len(r) > 200 {
+		name = string(r[:200])
+	}
+	return name
 }
