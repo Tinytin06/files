@@ -111,18 +111,24 @@ export async function createEntry(
 	combination: string,
 	adminToken: string
 ): Promise<{ ok: boolean; status: number; id?: string }> {
-	const combo = await seal(BASE, combination);
-	const res = await fetch(`${BASE}/entries`, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${adminToken}`
-		},
-		body: JSON.stringify({ label, combo })
-	});
-	let id: string | undefined;
-	if (res.ok) id = (await res.json()).id;
-	return { ok: res.ok, status: res.status, id };
+	try {
+		const combo = await seal(BASE, combination);
+		const res = await fetch(`${BASE}/entries`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${adminToken}`
+			},
+			body: JSON.stringify({ label, combo })
+		});
+		let id: string | undefined;
+		if (res.ok) id = (await res.json()).id;
+		return { ok: res.ok, status: res.status, id };
+	} catch {
+		// Network/crypto failure — report a non-ok result instead of throwing,
+		// so the caller can show a message rather than freezing.
+		return { ok: false, status: 0 };
+	}
 }
 
 /** Upload/replace the file for an entry. Any file type is accepted. */
@@ -131,17 +137,21 @@ export async function uploadEntryFile(
 	file: File,
 	adminToken: string
 ): Promise<{ ok: boolean; status: number }> {
-	const res = await fetch(`${BASE}/entries/${id}/file`, {
-		method: 'PUT',
-		headers: {
-			Authorization: `Bearer ${adminToken}`,
-			// Percent-encoded so non-ASCII names survive the header; the server
-			// sanitizes it. Lets the download preserve the original filename.
-			'X-Filename': encodeURIComponent(file.name)
-		},
-		body: file
-	});
-	return { ok: res.ok, status: res.status };
+	try {
+		const res = await fetch(`${BASE}/entries/${id}/file`, {
+			method: 'PUT',
+			headers: {
+				Authorization: `Bearer ${adminToken}`,
+				// Percent-encoded so non-ASCII names survive the header; the server
+				// sanitizes it. Lets the download preserve the original filename.
+				'X-Filename': encodeURIComponent(file.name)
+			},
+			body: file
+		});
+		return { ok: res.ok, status: res.status };
+	} catch {
+		return { ok: false, status: 0 };
+	}
 }
 
 /** Delete an entry (its combination and file). */
